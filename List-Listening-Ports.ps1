@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 $HostName  = $env:COMPUTERNAME
 $LogMaxKB  = 100
 $LogKeep   = 5
+
 function Rotate-Log {
     param ([string]$Path, [int]$MaxKB, [int]$Keep)
     if (Test-Path $Path) {
@@ -39,20 +40,29 @@ function Log-JSON {
     } | ConvertTo-Json -Depth 5 -Compress
     Add-Content -Path $ARLog -Value $Entry
 }
+
 Rotate-Log -Path $LogPath -MaxKB $LogMaxKB -Keep $LogKeep
+
+try {
+    if (Test-Path $ARLog) {
+        Remove-Item -Path $ARLog -Force -ErrorAction Stop
+    }
+    New-Item -Path $ARLog -ItemType File -Force | Out-Null
+    Write-Log INFO "Active response log cleared for fresh run."
+} catch {
+    Write-Log WARN "Failed to clear ${ARLog}: $($_.Exception.Message)"
+}
+
 Write-Log INFO "=== SCRIPT START : List Listening Ports ==="
 
 try {
     $netConnections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
                       Select-Object LocalPort, OwningProcess, LocalAddress
-
     $udpConnections = Get-NetUDPEndpoint -ErrorAction SilentlyContinue |
                       Select-Object LocalPort, OwningProcess, LocalAddress
     $udpConnections | ForEach-Object { $_ | Add-Member -NotePropertyName Protocol -NotePropertyValue "UDP" -Force }
     $netConnections | ForEach-Object { $_ | Add-Member -NotePropertyName Protocol -NotePropertyValue "TCP" -Force }
-
     $connections = $netConnections + $udpConnections
-
     $results = foreach ($conn in $connections) {
         $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
         $path = $null
@@ -75,18 +85,15 @@ try {
     Log-JSON -Data $flagged -Type 'listening_ports_flagged'
     Write-Log INFO "Collected $($results.Count) listening ports. Flagged $($flagged.Count)."
     Write-Host "Collected $($results.Count) listening ports. Flagged $($flagged.Count)." -ForegroundColor Cyan
-
     if ($flagged.Count -gt 0) {
         Write-Host "`nFlagged Listening Ports:" -ForegroundColor Yellow
         $flagged | Format-Table Protocol,LocalPort,ProcessName,ExecutablePath -AutoSize
     } else {
         Write-Host "`nNo suspicious ports or processes detected." -ForegroundColor Green
     }
-
-    Write-Host "`nJSON reports (full + flagged) appended to $ARLog" -ForegroundColor Gray
-    Write-Log INFO "JSON reports (full + flagged) appended to $ARLog"
-}
-catch {
+    Write-Host "`nJSON reports (full + flagged) written to $ARLog" -ForegroundColor Gray
+    Write-Log INFO "JSON reports (full + flagged) written to $ARLog"
+} catch {
     Write-Log ERROR "Failed to enumerate listening ports: $_"
     Write-Host "ERROR: Failed to enumerate listening ports. See $LogPath for details." -ForegroundColor Red
 }
