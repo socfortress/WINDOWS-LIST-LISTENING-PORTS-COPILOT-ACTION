@@ -30,28 +30,7 @@ function Write-Log {
     Add-Content -Path $LogPath -Value "[$Timestamp][$Level] $Message"
 }
 
-function Log-JSON {
-    param ($Data, [string]$Type)
-    $Entry = @{
-        timestamp = (Get-Date).ToString('o')
-        hostname  = $HostName
-        type      = $Type
-        data      = $Data
-    } | ConvertTo-Json -Depth 5 -Compress
-    Add-Content -Path $ARLog -Value $Entry
-}
-
 Rotate-Log -Path $LogPath -MaxKB $LogMaxKB -Keep $LogKeep
-
-try {
-    if (Test-Path $ARLog) {
-        Remove-Item -Path $ARLog -Force -ErrorAction Stop
-    }
-    New-Item -Path $ARLog -ItemType File -Force | Out-Null
-    Write-Log INFO "Active response log cleared for fresh run."
-} catch {
-    Write-Log WARN "Failed to clear ${ARLog}: $($_.Exception.Message)"
-}
 
 Write-Log INFO "=== SCRIPT START : List Listening Ports ==="
 
@@ -60,6 +39,7 @@ try {
                       Select-Object LocalPort, OwningProcess, LocalAddress
     $udpConnections = Get-NetUDPEndpoint -ErrorAction SilentlyContinue |
                       Select-Object LocalPort, OwningProcess, LocalAddress
+
     $udpConnections | ForEach-Object { $_ | Add-Member -NotePropertyName Protocol -NotePropertyValue "UDP" -Force }
     $netConnections | ForEach-Object { $_ | Add-Member -NotePropertyName Protocol -NotePropertyValue "TCP" -Force }
     $connections = $netConnections + $udpConnections
@@ -68,34 +48,65 @@ try {
         $path = $null
         try { $path = $proc.Path } catch {}
         [PSCustomObject]@{
-            Protocol = $conn.Protocol
-            LocalPort = $conn.LocalPort
-            LocalAddress = $conn.LocalAddress
-            ProcessName = $proc.ProcessName
-            ProcessId = $conn.OwningProcess
+            Protocol       = $conn.Protocol
+            LocalPort      = $conn.LocalPort
+            LocalAddress   = $conn.LocalAddress
+            ProcessName    = $proc.ProcessName
+            ProcessId      = $conn.OwningProcess
             ExecutablePath = $path
         }
     }
+
     $standardPorts = @(80,443,135,139,445,3389)
     $flagged = $results | Where-Object {
         ($_ -and $_.LocalPort -notin $standardPorts) -or
         ($_.ExecutablePath -match '\\AppData\\' -or $_.ExecutablePath -match '\\Temp\\')
     }
-    Log-JSON -Data $results -Type 'listening_ports_full'
-    Log-JSON -Data $flagged -Type 'listening_ports_flagged'
+    $report = [PSCustomObject]@{
+        timestamp = (Get-Date).ToString('o')
+        hostname  = $HostName
+        type      = 'listening_ports'
+        total_ports = $results.Count
+        flagged_ports = $flagged.Count
+        all_ports = $results
+        flagged   = $flagged
+    }
+    $json = $report | ConvertTo-Json -Depth 5 -Compress
+    $tempFile = "$env:TEMP\arlog.tmp"
+    Set-Content -Path $tempFile -Value $json -Encoding ascii -Force
+
+    try {
+        Move-Item -Path $tempFile -Destination $ARLog -Force
+        Write-Log INFO "Log file replaced at $ARLog"
+    } catch {
+        Move-Item -Path $tempFile -Destination "$ARLog.new" -Force
+        Write-Log WARN "Log locked, wrote results to $ARLog.new"
+    }
     Write-Log INFO "Collected $($results.Count) listening ports. Flagged $($flagged.Count)."
     Write-Host "Collected $($results.Count) listening ports. Flagged $($flagged.Count)." -ForegroundColor Cyan
+
     if ($flagged.Count -gt 0) {
         Write-Host "`nFlagged Listening Ports:" -ForegroundColor Yellow
         $flagged | Format-Table Protocol,LocalPort,ProcessName,ExecutablePath -AutoSize
     } else {
         Write-Host "`nNo suspicious ports or processes detected." -ForegroundColor Green
     }
-    Write-Host "`nJSON reports (full + flagged) written to $ARLog" -ForegroundColor Gray
-    Write-Log INFO "JSON reports (full + flagged) written to $ARLog"
-} catch {
+
+    Write-Host "`nResults written to $ARLog (or .new if locked)" -ForegroundColor Gray
+}
+catch {
     Write-Log ERROR "Failed to enumerate listening ports: $_"
-    Write-Host "ERROR: Failed to enumerate listening ports. See $LogPath for details." -ForegroundColor Red
+    $errorObj = [PSCustomObject]@{
+        timestamp = (Get-Date).ToString('o')
+        hostname  = $HostName
+        type      = 'listening_ports'
+        status    = 'error'
+        error     = $_.Exception.Message
+    }
+    $json = $errorObj | ConvertTo-Json -Compress
+    $fallback = "$ARLog.new"
+    Set-Content -Path $fallback -Value $json -Encoding ascii -Force
+    Write-Log WARN "Error logged to $fallback"
 }
 
 Write-Log INFO "=== SCRIPT END : List Listening Ports ==="
