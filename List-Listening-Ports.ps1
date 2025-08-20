@@ -70,6 +70,7 @@ try {
         flagged_ports = $flagged.Count
         all_ports = $results
         flagged   = $flagged
+        copilot_action = $true
     }
     $json = $report | ConvertTo-Json -Depth 5 -Compress
     $tempFile = "$env:TEMP\arlog.tmp"
@@ -102,7 +103,7 @@ catch {
         type      = 'listening_ports'
         status    = 'error'
         error     = $_.Exception.Message
-        copilot_soar = $true
+        copilot_action = $true
     }
     $json = $errorObj | ConvertTo-Json -Compress
     $fallback = "$ARLog.new"
@@ -111,3 +112,4 @@ catch {
 }
 
 Write-Log INFO "=== SCRIPT END : List Listening Ports ==="
+
