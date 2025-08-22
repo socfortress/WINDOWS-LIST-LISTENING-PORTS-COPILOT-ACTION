@@ -31,7 +31,6 @@ function Write-Log {
 }
 
 Rotate-Log -Path $LogPath -MaxKB $LogMaxKB -Keep $LogKeep
-
 Write-Log INFO "=== SCRIPT START : List Listening Ports ==="
 
 try {
@@ -42,7 +41,9 @@ try {
 
     $udpConnections | ForEach-Object { $_ | Add-Member -NotePropertyName Protocol -NotePropertyValue "UDP" -Force }
     $netConnections | ForEach-Object { $_ | Add-Member -NotePropertyName Protocol -NotePropertyValue "TCP" -Force }
+
     $connections = $netConnections + $udpConnections
+
     $results = foreach ($conn in $connections) {
         $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
         $path = $null
@@ -58,37 +59,78 @@ try {
     }
 
     $standardPorts = @(80,443,135,139,445,3389)
-    $flagged = $results | Where-Object {
-        ($_ -and $_.LocalPort -notin $standardPorts) -or
-        ($_.ExecutablePath -match '\\AppData\\' -or $_.ExecutablePath -match '\\Temp\\')
-    }
-    $report = [PSCustomObject]@{
-        timestamp = (Get-Date).ToString('o')
-        hostname  = $HostName
-        type      = 'listening_ports'
-        total_ports = $results.Count
-        flagged_ports = $flagged.Count
-        all_ports = $results
-        flagged   = $flagged
+
+    $lines = @()
+
+    # Summary line first (NDJSON)
+    $flaggedCount = 0
+    $totalCount   = ($results | Measure-Object).Count
+    $summaryObj = [PSCustomObject]@{
+        timestamp      = (Get-Date).ToString('o')
+        host           = $HostName
+        action         = 'list_listening_ports'
+        total_ports    = $totalCount
         copilot_action = $true
     }
-    $json = $report | ConvertTo-Json -Depth 5 -Compress
-    $tempFile = "$env:TEMP\arlog.tmp"
-    Set-Content -Path $tempFile -Value $json -Encoding ascii -Force
+    $lines += ($summaryObj | ConvertTo-Json -Compress -Depth 3)
 
+    foreach ($r in $results) {
+        $reasons = @()
+        if ($r.LocalPort -notin $standardPorts) { $reasons += 'nonstandard_port' }
+        if ($r.ExecutablePath -match '\\AppData\\') { $reasons += 'path_AppData' }
+        if ($r.ExecutablePath -match '\\Temp\\')    { $reasons += 'path_Temp' }
+        $isFlagged = $reasons.Count -gt 0
+        if ($isFlagged) { $flaggedCount++ }
+
+        $lines += ([PSCustomObject]@{
+            timestamp       = (Get-Date).ToString('o')
+            host            = $HostName
+            action          = 'list_listening_ports'
+            protocol        = $r.Protocol
+            local_port      = $r.LocalPort
+            local_address   = $r.LocalAddress
+            process_name    = $r.ProcessName
+            process_id      = $r.ProcessId
+            executable_path = $r.ExecutablePath
+            flagged         = $isFlagged
+            reasons         = if ($reasons.Count) { ($reasons -join ',') } else { $null }
+            copilot_action  = $true
+        } | ConvertTo-Json -Compress -Depth 4)
+    }
+
+    # Replace the summary line with final flagged count (keep it as the first NDJSON line)
+    $lines[0] = ([PSCustomObject]@{
+        timestamp      = $summaryObj.timestamp
+        host           = $HostName
+        action         = 'list_listening_ports'
+        total_ports    = $totalCount
+        flagged_ports  = $flaggedCount
+        copilot_action = $true
+    } | ConvertTo-Json -Compress -Depth 3)
+
+    $ndjson = [string]::Join("`n", $lines)
+
+    $tempFile = "$env:TEMP\arlog.tmp"
+    Set-Content -Path $tempFile -Value $ndjson -Encoding ascii -Force
+
+    $recordCount = $lines.Count
     try {
         Move-Item -Path $tempFile -Destination $ARLog -Force
-        Write-Log INFO "Log file replaced at $ARLog"
+        Write-Log INFO "Wrote $recordCount NDJSON record(s) to $ARLog"
     } catch {
         Move-Item -Path $tempFile -Destination "$ARLog.new" -Force
-        Write-Log WARN "Log locked, wrote results to $ARLog.new"
+        Write-Log WARN "ARLog locked; wrote to $($ARLog).new"
     }
-    Write-Log INFO "Collected $($results.Count) listening ports. Flagged $($flagged.Count)."
-    Write-Host "Collected $($results.Count) listening ports. Flagged $($flagged.Count)." -ForegroundColor Cyan
 
-    if ($flagged.Count -gt 0) {
+    Write-Log INFO "Collected $totalCount listening ports. Flagged $flaggedCount."
+    Write-Host "Collected $totalCount listening ports. Flagged $flaggedCount." -ForegroundColor Cyan
+
+    if ($flaggedCount -gt 0) {
         Write-Host "`nFlagged Listening Ports:" -ForegroundColor Yellow
-        $flagged | Format-Table Protocol,LocalPort,ProcessName,ExecutablePath -AutoSize
+        $results | Where-Object {
+            ($_ -and $_.LocalPort -notin $standardPorts) -or
+            ($_.ExecutablePath -match '\\AppData\\' -or $_.ExecutablePath -match '\\Temp\\')
+        } | Format-Table Protocol,LocalPort,ProcessName,ExecutablePath -AutoSize
     } else {
         Write-Host "`nNo suspicious ports or processes detected." -ForegroundColor Green
     }
@@ -98,18 +140,23 @@ try {
 catch {
     Write-Log ERROR "Failed to enumerate listening ports: $_"
     $errorObj = [PSCustomObject]@{
-        timestamp = (Get-Date).ToString('o')
-        hostname  = $HostName
-        type      = 'listening_ports'
-        status    = 'error'
-        error     = $_.Exception.Message
+        timestamp      = (Get-Date).ToString('o')
+        host           = $HostName
+        action         = 'list_listening_ports'
+        status         = 'error'
+        error          = $_.Exception.Message
         copilot_action = $true
     }
-    $json = $errorObj | ConvertTo-Json -Compress
-    $fallback = "$ARLog.new"
-    Set-Content -Path $fallback -Value $json -Encoding ascii -Force
-    Write-Log WARN "Error logged to $fallback"
+    $ndjson = ($errorObj | ConvertTo-Json -Compress -Depth 3)
+    $tempFile = "$env:TEMP\arlog.tmp"
+    Set-Content -Path $tempFile -Value $ndjson -Encoding ascii -Force
+    try {
+        Move-Item -Path $tempFile -Destination $ARLog -Force
+        Write-Log INFO "Error JSON written to $ARLog"
+    } catch {
+        Move-Item -Path $tempFile -Destination "$ARLog.new" -Force
+        Write-Log WARN "ARLog locked; wrote error to $($ARLog).new"
+    }
 }
 
 Write-Log INFO "=== SCRIPT END : List Listening Ports ==="
-
