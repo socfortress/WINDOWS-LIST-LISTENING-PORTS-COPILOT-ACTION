@@ -1,0 +1,26 @@
+{
+  "active_response_name": "WINDOWS-LIST-LISTENING-PORTS-ACTIVERESPONSE",
+  "description": "Enumerates all listening TCP and UDP ports, correlates them with owning processes and executable paths, and flags potential anomalies such as nonstandard ports, executables in AppData, or executables in Temp directories. Outputs NDJSON (summary + per-port entry) and writes atomically to the Active Response log with .new fallback.",
+  "technology": "Windows",
+  "icon": "windows",
+  "script_parameters": [
+    {
+      "name": "LogPath",
+      "type": "string",
+      "required": false,
+      "description": "Path to the rotating human-readable script log.",
+      "default": "%TEMP%/List-Listening-Ports.log"
+    },
+    {
+      "name": "ARLog",
+      "type": "string",
+      "required": false,
+      "description": "Active Response NDJSON output path (atomic overwrite; falls back to .new if locked).",
+      "default": "C:\\Program Files (x86)\\ossec-agent\\active-response\\active-responses.log"
+    }
+  ],
+  "repo_url": "https://github.com/socfortress/WINDOWS-LIST-LISTENING-PORTS-ACTIVERESPONSE",
+  "script_name": "List-Listening-Ports.ps1",
+  "version": "1.0.0",
+  "last_updated": "2025-08-22T00:00:00Z"
+}
