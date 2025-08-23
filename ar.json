@@ -1,5 +1,5 @@
 {
-  "copilot_action_name": "WINDOWS-LIST-LISTENING-PORTS-ACTIVERESPONSE",
+  "copilot_action_name": "WINDOWS-LIST-LISTENING-PORTS-COPILOT-ACTION",
   "description": "Enumerates all listening TCP and UDP ports, correlates them with owning processes and executable paths, and flags potential anomalies such as nonstandard ports, executables in AppData, or executables in Temp directories. Outputs NDJSON (summary + per-port entry) and writes atomically to the Active Response log with .new fallback.",
   "technology": "Windows",
   "icon": "windows",
