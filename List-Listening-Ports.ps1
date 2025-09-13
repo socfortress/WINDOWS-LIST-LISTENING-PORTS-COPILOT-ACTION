@@ -95,7 +95,7 @@ try {
     $nores = New-NdjsonLine @{
       timestamp      = $tsNow
       host           = $HostName
-      action         = 'list_listening_ports'
+      action         = 'Windows_list_listening_ports'
       copilot_action = $true
       item           = 'status'
       status         = 'no_results'
@@ -114,7 +114,7 @@ try {
   [void]$lines.Add( (New-NdjsonLine @{
     timestamp      = $tsNow
     host           = $HostName
-    action         = 'list_listening_ports'
+    action         = 'Windows_list_listening_ports'
     copilot_action = $true
     item           = 'summary'
     description    = 'Run summary and counts'
@@ -137,7 +137,7 @@ try {
     [void]$lines.Add( (New-NdjsonLine @{
       timestamp       = $tsNow
       host            = $HostName
-      action          = 'list_listening_ports'
+      action          = 'Windows_list_listening_ports'
       copilot_action  = $true
       item            = 'port'
       description     = $desc
@@ -156,7 +156,7 @@ try {
   $lines[0] = (New-NdjsonLine @{
     timestamp      = $tsNow
     host           = $HostName
-    action         = 'list_listening_ports'
+    action         = 'Windows_list_listening_ports'
     copilot_action = $true
     item           = 'summary'
     description    = 'Run summary and counts'
@@ -185,7 +185,7 @@ try {
   $err = New-NdjsonLine @{
     timestamp      = To-ISO8601 (Get-Date)
     host           = $HostName
-    action         = 'list_listening_ports'
+    action         = 'Windows_list_listening_ports'
     copilot_action = $true
     item           = 'error'
     description    = 'Unhandled error'
@@ -197,3 +197,4 @@ try {
 finally {
   Write-Log INFO "=== SCRIPT END : List Listening Ports ==="
 }
+
