@@ -59,17 +59,122 @@ Rotate-Log -Path $LogPath -MaxKB $LogMaxKB -Keep $LogKeep
 Write-Log INFO "=== SCRIPT START : List Listening Ports (host=$HostName) ==="
 
 try {
-  $netConnections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-                    Select-Object LocalPort, OwningProcess, LocalAddress
-  $udpConnections = Get-NetUDPEndpoint -ErrorAction SilentlyContinue |
-                    Select-Object LocalPort, OwningProcess, LocalAddress
-
-  $udpConnections | ForEach-Object { $_ | Add-Member -NotePropertyName Protocol -NotePropertyValue 'UDP' -Force }
-  $netConnections | ForEach-Object { $_ | Add-Member -NotePropertyName Protocol -NotePropertyValue 'TCP' -Force }
-
   $connections = @()
-  if ($netConnections) { $connections += $netConnections }
-  if ($udpConnections) { $connections += $udpConnections }
+
+  $UseNetTCPConnection = [bool](Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)
+  $UseNetUDPEndpoint   = [bool](Get-Command Get-NetUDPEndpoint -ErrorAction SilentlyContinue)
+
+  if ($UseNetTCPConnection -and $UseNetUDPEndpoint) {
+
+      # Modern Windows - existing NetTCPIP implementation
+      $netConnections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+                        Select-Object LocalPort, OwningProcess, LocalAddress
+
+      $udpConnections = Get-NetUDPEndpoint -ErrorAction SilentlyContinue |
+                        Select-Object LocalPort, OwningProcess, LocalAddress
+
+      $udpConnections | ForEach-Object {
+          $_ | Add-Member -NotePropertyName Protocol -NotePropertyValue 'UDP' -Force
+      }
+
+      $netConnections | ForEach-Object {
+          $_ | Add-Member -NotePropertyName Protocol -NotePropertyValue 'TCP' -Force
+      }
+
+      if ($netConnections) { $connections += $netConnections }
+      if ($udpConnections) { $connections += $udpConnections }
+
+  }
+  else {
+
+      # Legacy Windows - netstat fallback
+
+      function Convert-NetstatEndpoint {
+          param(
+              [string]$Endpoint
+          )
+
+          if ($Endpoint -match '^\[(.+)\]:(\d+)$') {
+              return @{
+                  Address = $matches[1]
+                  Port    = [int]$matches[2]
+              }
+          }
+
+          if ($Endpoint -match '^(.*):(\d+)$') {
+              return @{
+                  Address = $matches[1]
+                  Port    = [int]$matches[2]
+              }
+          }
+
+          return $null
+      }
+
+
+      # TCP listeners
+      $tcpLines = & "$env:SystemRoot\System32\netstat.exe" -ano -p tcp
+
+      foreach ($line in $tcpLines) {
+
+          $parts = ($line.Trim() -split '\s+')
+
+          # Expected TCP format:
+          # TCP LocalAddress RemoteAddress State PID
+          if ($parts.Count -lt 5 -or $parts[0] -ne 'TCP') {
+              continue
+          }
+
+          $localEndpoint  = Convert-NetstatEndpoint $parts[1]
+          $remoteEndpoint = Convert-NetstatEndpoint $parts[2]
+
+          if (-not $localEndpoint -or -not $remoteEndpoint) {
+              continue
+          }
+
+          # Listening TCP sockets have remote port 0.
+          # This avoids depending on localized state strings such as
+          # LISTENING / ESCUCHANDO.
+          if ($remoteEndpoint.Port -ne 0) {
+              continue
+          }
+
+          $connections += [PSCustomObject]@{
+              Protocol      = 'TCP'
+              LocalPort     = $localEndpoint.Port
+              LocalAddress  = $localEndpoint.Address
+              OwningProcess = [int]$parts[$parts.Count - 1]
+          }
+      }
+
+
+      # UDP endpoints
+      $udpLines = & "$env:SystemRoot\System32\netstat.exe" -ano -p udp
+
+      foreach ($line in $udpLines) {
+
+          $parts = ($line.Trim() -split '\s+')
+
+          # Expected UDP format:
+          # UDP LocalAddress RemoteAddress PID
+          if ($parts.Count -lt 4 -or $parts[0] -ne 'UDP') {
+              continue
+          }
+
+          $localEndpoint = Convert-NetstatEndpoint $parts[1]
+
+          if (-not $localEndpoint) {
+              continue
+          }
+
+          $connections += [PSCustomObject]@{
+              Protocol      = 'UDP'
+              LocalPort     = $localEndpoint.Port
+              LocalAddress  = $localEndpoint.Address
+              OwningProcess = [int]$parts[$parts.Count - 1]
+          }
+      }
+  }
 
   $results = foreach ($conn in $connections) {
     $proc = $null
